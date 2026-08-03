@@ -4,6 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { generateRound } from "@/lib/generateRound";
 import { seededProfile, seededRound } from "@/lib/seedRound";
 import {
+  fieldGuideCategories,
+  fieldGuideGeneralTips,
+  imageCategoryLabel,
+  imageRound as imageRoundData,
+  shuffleImageRound,
+  summarizeImageRound
+} from "@/lib/imageRound";
+import {
   formatProfileSummary,
   scoreHeadline,
   shuffleRound,
@@ -11,9 +19,20 @@ import {
   tacticLabel,
   toDemoDigestText
 } from "@/lib/validate";
-import type { AnswerRecord, Message, Profile, ScoreBreakdown, Tactic } from "@/lib/types";
+import type {
+  AnswerRecord,
+  ImageAnswerRecord,
+  ImageCategory,
+  ImageItem,
+  ImageScoreBreakdown,
+  Illustration,
+  Message,
+  Profile,
+  ScoreBreakdown,
+  Tactic
+} from "@/lib/types";
 
-type Screen = "welcome" | "arena" | "setup" | "loading" | "playing" | "summary" | "digest";
+type Screen = "welcome" | "arena" | "setup" | "loading" | "playing" | "imageGuide" | "imageRound" | "summary" | "digest";
 
 type TrainingLevel = {
   id: 1 | 2 | 3;
@@ -47,11 +66,26 @@ const trainingLevels: TrainingLevel[] = [
     id: 3,
     title: "Boss Round",
     label: "Level 3",
-    description: "The full arena with the hardest mix.",
-    messages: 9,
+    description: "No messages this time — just real, AI-generated, and deepfake photos and videos.",
+    messages: 0,
     passScore: 85
   }
 ];
+
+const emptyScore: ScoreBreakdown = {
+  score: 0,
+  correct: 0,
+  total: 0,
+  byTactic: {
+    urgency: { correct: 0, total: 0 },
+    authority: { correct: 0, total: 0 },
+    fear: { correct: 0, total: 0 },
+    greed: { correct: 0, total: 0 },
+    familiarity: { correct: 0, total: 0 }
+  },
+  strongestTactic: null,
+  weakestTactic: null
+};
 
 const loaderLines = [
   "Building your practice round… studying urgency tricks ✓",
@@ -130,6 +164,9 @@ export default function Page() {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [activeLevelId, setActiveLevelId] = useState<1 | 2 | 3>(1);
   const [highestUnlockedLevel, setHighestUnlockedLevel] = useState<1 | 2 | 3>(1);
+  const [imageItems, setImageItems] = useState<ImageItem[]>([]);
+  const [imageAnswers, setImageAnswers] = useState<ImageAnswerRecord[]>([]);
+  const [imageScore, setImageScore] = useState<ImageScoreBreakdown | null>(null);
   useEffect(() => {
     if (!demoMode) return;
     setProfile(seededProfile);
@@ -172,6 +209,18 @@ export default function Page() {
     setSetupError(null);
     setProfile(cleaned);
     setActiveLevelId(levelId);
+
+    if (levelId === 3) {
+      setRound([]);
+      setAnswers([]);
+      setScore(emptyScore);
+      setImageItems(shuffleImageRound(imageRoundData));
+      setImageAnswers([]);
+      setImageScore(null);
+      setScreen("imageGuide");
+      return;
+    }
+
     setScreen("loading");
 
     const level = getLevel(levelId);
@@ -202,6 +251,14 @@ export default function Page() {
     if (nextScore.score >= currentLevel.passScore && activeLevelId < 3) {
       setHighestUnlockedLevel((current) => (activeLevelId + 1 > current ? (activeLevelId + 1) as 1 | 2 | 3 : current));
     }
+    setImageScore(null);
+    setScreen("summary");
+  }
+
+  function handleImageRoundComplete(nextAnswers: ImageAnswerRecord[]) {
+    const nextImageScore = summarizeImageRound(imageItems, nextAnswers);
+    setImageAnswers(nextAnswers);
+    setImageScore(nextImageScore);
     setScreen("summary");
   }
 
@@ -217,13 +274,21 @@ export default function Page() {
 
   const currentLevel = getLevel(activeLevelId);
 
+  const combined = useMemo(() => {
+    if (!score) return null;
+    if (!imageScore) return { score: score.score, correct: score.correct, total: score.total };
+    const total = score.total + imageScore.total;
+    const correct = score.correct + imageScore.correct;
+    return { score: total ? Math.round((correct / total) * 100) : 0, correct, total };
+  }, [score, imageScore]);
+
   const summaryText = useMemo(() => {
-    if (!score) return "";
-    return `${profile.firstName}'s Scam Defense Report\nScore: ${score.score}/100\nMessages faced: ${score.total}\nSpotted: ${score.correct}`;
-  }, [profile.firstName, score]);
+    if (!score || !combined) return "";
+    return `${profile.firstName}'s Scam Defense Report\nScore: ${combined.score}/100\nItems faced: ${combined.total}\nSpotted: ${combined.correct}`;
+  }, [profile.firstName, score, combined]);
 
   async function copyDigest() {
-    const text = score ? toDemoDigestText(profile, score.score, score) : summaryText;
+    const text = score && combined ? toDemoDigestText(profile, combined.score, score, imageScore) : summaryText;
     try {
       await navigator.clipboard.writeText(text);
       setCopyState("copied");
@@ -234,8 +299,8 @@ export default function Page() {
   }
 
   async function shareDigest() {
-    if (!score) return;
-    const text = toDemoDigestText(profile, score.score, score);
+    if (!score || !combined) return;
+    const text = toDemoDigestText(profile, combined.score, score, imageScore);
     if (navigator.share) {
       await navigator.share({ title: "Scam Dojo", text });
     } else {
@@ -281,14 +346,22 @@ export default function Page() {
 
         {screen === "playing" && round.length > 0 && <RoundScreen round={round} level={currentLevel} onHome={() => setScreen("welcome")} onComplete={handleRoundComplete} />}
 
-        {screen === "summary" && score && (
+        {screen === "imageGuide" && <ImageGuideScreen onHome={() => setScreen("welcome")} onContinue={() => setScreen("imageRound")} />}
+
+        {screen === "imageRound" && imageItems.length > 0 && (
+          <ImageRoundScreen items={imageItems} onHome={() => setScreen("welcome")} onComplete={handleImageRoundComplete} />
+        )}
+
+        {screen === "summary" && score && combined && (
           <SummaryScreen
             profile={profile}
             score={score}
+            imageScore={imageScore}
+            combined={combined}
             round={round}
             answers={answers}
             level={currentLevel}
-            canAdvance={activeLevelId < 3 && score.score >= currentLevel.passScore}
+            canAdvance={activeLevelId < 3 && combined.score >= currentLevel.passScore}
             nextLevel={activeLevelId < 3 ? getLevel((activeLevelId + 1) as 1 | 2 | 3) : null}
             onHome={() => setScreen("welcome")}
             onDigest={() => setScreen("digest")}
@@ -298,10 +371,13 @@ export default function Page() {
           />
         )}
 
-        {screen === "digest" && score && (
+        {screen === "digest" && score && combined && (
           <DigestScreen
             profile={profile}
             score={score}
+            imageScore={imageScore}
+            combined={combined}
+            level={currentLevel}
             copyState={copyState}
             summaryText={summaryText}
             onHome={() => setScreen("welcome")}
@@ -404,7 +480,10 @@ function ArenaScreen({
               </div>
               <p className="bodyText">{level.description}</p>
               <div className="metricGrid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-                <div className="metricCard"><strong>{level.messages}</strong><span className="muted">messages</span></div>
+                <div className="metricCard">
+                  <strong>{level.id === 3 ? 6 : level.messages}</strong>
+                  <span className="muted">{level.id === 3 ? "photos & videos" : "messages"}</span>
+                </div>
                 <div className="metricCard"><strong>{level.passScore}+</strong><span className="muted">to clear</span></div>
               </div>
               <button className="primaryButton" onClick={() => onStartLevel(level.id)} disabled={!unlocked} type="button">
@@ -671,9 +750,178 @@ function CoachCard({ message, answer, onNext }: { message: Message; answer: Answ
   );
 }
 
+function ImageGuideScreen({ onHome, onContinue }: { onHome: () => void; onContinue: () => void }) {
+  return (
+    <section className="panel stack">
+      <div className="buttonRow" style={{ gridTemplateColumns: "auto auto", justifyContent: "start" }}>
+        <div className="smallCaps">Level 3 · Photo & Video Check</div>
+        <button className="textButton" onClick={onHome} type="button">Home</button>
+      </div>
+      <h1 className="headline" style={{ fontSize: "clamp(1.8rem, 4vw, 2.8rem)" }}>Spot the fake before you trust it.</h1>
+      <p className="subhead">Scammers now use photos and videos, not just messages. Here&apos;s what to look for before you decide what&apos;s real.</p>
+
+      <div className="guideGrid">
+        {fieldGuideCategories.map((category) => (
+          <div key={category.id} className="metricCard guideCard" data-tone={imageCategoryTone(category.id)}>
+            <div className="statusChip" data-tone={imageCategoryTone(category.id)}>{category.label}</div>
+            <p className="bodyText">{category.summary}</p>
+            <ul className="bulletList">
+              {category.signs.map((sign) => <li key={sign}>{sign}</li>)}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <div className="coachCard">
+        <div className="coachBadge" data-tactic="authority">Before you decide</div>
+        <ul className="bulletList">
+          {fieldGuideGeneralTips.map((tip) => <li key={tip}>{tip}</li>)}
+        </ul>
+      </div>
+
+      <div className="buttonRow">
+        <button className="primaryButton" onClick={onContinue} type="button">Start the Photo & Video Check</button>
+      </div>
+    </section>
+  );
+}
+
+function imageCategoryTone(category: ImageCategory) {
+  if (category === "real") return "good";
+  if (category === "ai") return "warn";
+  return "bad";
+}
+
+function IllustratedMedia({ illustration }: { illustration: Illustration }) {
+  if (illustration === "profile") {
+    return (
+      <div className="mediaFrame mediaFrame--profile">
+        <div className="mediaAvatar" />
+        <div className="mediaProfileLines">
+          <div className="mediaLine" style={{ width: "62%" }} />
+          <div className="mediaLine" style={{ width: "40%" }} />
+        </div>
+      </div>
+    );
+  }
+  if (illustration === "listing") {
+    return (
+      <div className="mediaFrame mediaFrame--listing">
+        <div className="mediaListingImage" />
+        <div className="mediaListingTag">$24.99</div>
+      </div>
+    );
+  }
+  return (
+    <div className="mediaFrame mediaFrame--videocall">
+      <div className="mediaVideoChrome"><span className="mediaLiveDot" />Live video</div>
+      <div className="mediaVideoFace" />
+    </div>
+  );
+}
+
+function ImageRoundScreen({ items, onHome, onComplete }: { items: ImageItem[]; onHome: () => void; onComplete: (answers: ImageAnswerRecord[]) => void }) {
+  const [index, setIndex] = useState(0);
+  const [answers, setAnswers] = useState<ImageAnswerRecord[]>([]);
+  const [currentAnswer, setCurrentAnswer] = useState<ImageAnswerRecord | null>(null);
+  const [locked, setLocked] = useState(false);
+
+  const item = items[index];
+  const isFinal = index === items.length - 1;
+
+  function answer(userSaidCategory: ImageCategory) {
+    if (locked || !item) return;
+    setLocked(true);
+    const correct = userSaidCategory === item.category;
+    const nextAnswer: ImageAnswerRecord = { id: item.id, userSaidCategory, correct, category: item.category };
+    const nextAnswers = [...answers, nextAnswer];
+    setAnswers(nextAnswers);
+    setCurrentAnswer(nextAnswer);
+  }
+
+  function next() {
+    if (isFinal) {
+      onComplete(answers);
+      return;
+    }
+    setIndex((current) => current + 1);
+    setCurrentAnswer(null);
+    setLocked(false);
+  }
+
+  if (!item) return null;
+
+  const verdict = currentAnswer
+    ? currentAnswer.correct
+      ? { tone: "good" as const, icon: "✓", text: "You spotted it!" }
+      : { tone: "warn" as const, icon: "○", text: "Good try — this one's sneaky" }
+    : null;
+
+  return (
+    <section className="stack">
+      <div className="screenHeader">
+        <div className="buttonRow" style={{ gridTemplateColumns: "auto auto", justifyContent: "start" }}>
+          <div className="progressChip">Item {index + 1} of {items.length}</div>
+          <button className="textButton" onClick={onHome} type="button">Home</button>
+        </div>
+        <div className="scoreChip">{answers.filter((entry) => entry.correct).length} correct</div>
+      </div>
+
+      <div className="messageCard">
+        <div className="messageHeader">
+          <div>
+            <div className="smallCaps">Photo & video check</div>
+            <strong className="bodyText">{item.context}</strong>
+          </div>
+          <div className="statusChip" data-tone="neutral">Practice item</div>
+        </div>
+
+        {item.kind === "photo" ? (
+          <div className="mediaFrame mediaFrame--photo">
+            <img src={item.photoSrc} alt={item.photoAlt ?? ""} />
+          </div>
+        ) : (
+          <IllustratedMedia illustration={item.illustration ?? "profile"} />
+        )}
+
+        {verdict && <div className="verdictBox" data-tone={verdict.tone}>{verdict.icon} {verdict.text}</div>}
+
+        <div className="answerGrid answerGrid--triple">
+          <button className="answerButton" data-choice="real" disabled={locked} onClick={() => answer("real")} type="button">✅ Real</button>
+          <button className="answerButton" data-choice="ai" disabled={locked} onClick={() => answer("ai")} type="button">🖼️ AI-Made</button>
+          <button className="answerButton" data-choice="deepfake" disabled={locked} onClick={() => answer("deepfake")} type="button">🎭 Deepfake</button>
+        </div>
+      </div>
+
+      {currentAnswer && <ImageCoachCard item={item} answer={currentAnswer} onNext={next} />}
+    </section>
+  );
+}
+
+function ImageCoachCard({ item, answer, onNext }: { item: ImageItem; answer: ImageAnswerRecord; onNext: () => void }) {
+  const tone = answer.correct ? "good" : "warn";
+  return (
+    <div className="coachCard">
+      <div className="coachBadge" data-tactic={item.category === "real" ? "familiarity" : item.category === "ai" ? "greed" : "fear"}>
+        {imageCategoryLabel[item.category]}
+      </div>
+      <div className="bodyText">{item.explanation}</div>
+      <ul className="bulletList">
+        {item.tells.map((tell) => <li key={tell}>{tell}</li>)}
+      </ul>
+      <div className="buttonRow">
+        <div className="statusChip" data-tone={tone}>{answer.correct ? "Correct" : "Sneaky one"}</div>
+        <button className="primaryButton" onClick={onNext} type="button">Next item</button>
+      </div>
+    </div>
+  );
+}
+
 function SummaryScreen({
   profile,
   score,
+  imageScore,
+  combined,
   round,
   answers,
   level,
@@ -687,6 +935,8 @@ function SummaryScreen({
 }: {
   profile: Profile;
   score: ScoreBreakdown;
+  imageScore: ImageScoreBreakdown | null;
+  combined: { score: number; correct: number; total: number };
   round: Message[];
   answers: AnswerRecord[];
   level: TrainingLevel;
@@ -707,33 +957,60 @@ function SummaryScreen({
         </div>
         <div className="smallCaps">{level.label} summary</div>
         <h1 className="headline" style={{ fontSize: "clamp(1.8rem, 4vw, 2.8rem)" }}>Nice work, {profile.firstName || "friend"}.</h1>
-        <div className="summaryScore">{score.score}</div>
+        <div className="summaryScore">{combined.score}</div>
         <div className="bodyText">Scam-Proof Score</div>
-        <p className="subhead">{scoreHeadline(score.score)}</p>
+        <p className="subhead">{scoreHeadline(combined.score)}</p>
         {canAdvance && nextLevel && <div className="verdictBox" data-tone="good">Unlocked {nextLevel.label}: {nextLevel.title}</div>}
         <div className="metricGrid">
-          <div className="metricCard"><strong>{score.correct}</strong><span className="muted">Correct answers</span></div>
-          <div className="metricCard"><strong>{score.total}</strong><span className="muted">Messages faced</span></div>
-          <div className="metricCard"><strong>{score.strongestTactic ?? "n/a"}</strong><span className="muted">Best tactic</span></div>
-          <div className="metricCard"><strong>{score.weakestTactic ?? "n/a"}</strong><span className="muted">Needs another pass</span></div>
+          <div className="metricCard"><strong>{combined.correct}</strong><span className="muted">Correct answers</span></div>
+          <div className="metricCard"><strong>{combined.total}</strong><span className="muted">Items faced</span></div>
+          {level.id !== 3 && (
+            <>
+              <div className="metricCard"><strong>{score.strongestTactic ?? "n/a"}</strong><span className="muted">Best tactic</span></div>
+              <div className="metricCard"><strong>{score.weakestTactic ?? "n/a"}</strong><span className="muted">Needs another pass</span></div>
+            </>
+          )}
         </div>
       </div>
       <div className="panel stack">
-        <div className="smallCaps">Per tactic</div>
-        <div className="bars">
-          {Object.entries(score.byTactic).map(([tactic, stats]) => {
-            const percent = stats.total ? Math.round((stats.correct / stats.total) * 100) : 0;
-            return (
-              <div key={tactic} className="barRow">
-                <div className="screenHeader">
-                  <strong>{tacticLabel(tactic as Tactic)}</strong>
-                  <span className="muted">{stats.correct}/{stats.total}</span>
-                </div>
-                <div className="barTrack"><div className="barFill" style={{ width: `${percent}%` }} /></div>
-              </div>
-            );
-          })}
-        </div>
+        {level.id !== 3 && (
+          <>
+            <div className="smallCaps">Per tactic</div>
+            <div className="bars">
+              {Object.entries(score.byTactic).map(([tactic, stats]) => {
+                const percent = stats.total ? Math.round((stats.correct / stats.total) * 100) : 0;
+                return (
+                  <div key={tactic} className="barRow">
+                    <div className="screenHeader">
+                      <strong>{tacticLabel(tactic as Tactic)}</strong>
+                      <span className="muted">{stats.correct}/{stats.total}</span>
+                    </div>
+                    <div className="barTrack"><div className="barFill" style={{ width: `${percent}%` }} /></div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+        {imageScore && (
+          <>
+            <div className="smallCaps">Photo & video check</div>
+            <div className="bars">
+              {Object.entries(imageScore.byCategory).map(([category, stats]) => {
+                const percent = stats.total ? Math.round((stats.correct / stats.total) * 100) : 0;
+                return (
+                  <div key={category} className="barRow">
+                    <div className="screenHeader">
+                      <strong>{imageCategoryLabel[category as ImageCategory]}</strong>
+                      <span className="muted">{stats.correct}/{stats.total}</span>
+                    </div>
+                    <div className="barTrack"><div className="barFill" style={{ width: `${percent}%` }} /></div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
         <div className="buttonRow">
           <button className="primaryButton" onClick={onDigest} type="button">Share with family</button>
           <button className="secondaryButton" onClick={onTrainAgain} type="button">Train again</button>
@@ -749,6 +1026,9 @@ function SummaryScreen({
 function DigestScreen({
   profile,
   score,
+  imageScore,
+  combined,
+  level,
   copyState,
   summaryText,
   onHome,
@@ -759,6 +1039,9 @@ function DigestScreen({
 }: {
   profile: Profile;
   score: ScoreBreakdown;
+  imageScore: ImageScoreBreakdown | null;
+  combined: { score: number; correct: number; total: number };
+  level: TrainingLevel;
   copyState: "idle" | "copied" | "failed";
   summaryText: string;
   onHome: () => void;
@@ -774,10 +1057,17 @@ function DigestScreen({
         <h1 className="digestTitle">{profile.firstName}&apos;s Scam Defense Report</h1>
         <p className="subhead">A screenshot-friendly summary for the family chat.</p>
         <div className="digestStats">
-          <div className="digestStat"><div className="smallCaps">Score</div><strong className="summaryScore" style={{ fontSize: "clamp(2.6rem, 6vw, 4rem)" }}>{score.score}</strong></div>
-          <div className="digestStat"><div className="smallCaps">Messages faced</div><strong>{score.total}</strong></div>
-          <div className="digestStat"><div className="smallCaps">Best tactic</div><strong>{score.strongestTactic ?? "n/a"}</strong></div>
-          <div className="digestStat"><div className="smallCaps">Hardest tactic</div><strong>{score.weakestTactic ?? "n/a"}</strong></div>
+          <div className="digestStat"><div className="smallCaps">Score</div><strong className="summaryScore" style={{ fontSize: "clamp(2.6rem, 6vw, 4rem)" }}>{combined.score}</strong></div>
+          <div className="digestStat"><div className="smallCaps">Items faced</div><strong>{combined.total}</strong></div>
+          {level.id !== 3 && (
+            <>
+              <div className="digestStat"><div className="smallCaps">Best tactic</div><strong>{score.strongestTactic ?? "n/a"}</strong></div>
+              <div className="digestStat"><div className="smallCaps">Hardest tactic</div><strong>{score.weakestTactic ?? "n/a"}</strong></div>
+            </>
+          )}
+          {imageScore && (
+            <div className="digestStat"><div className="smallCaps">Photo & video check</div><strong>{imageScore.correct}/{imageScore.total}</strong></div>
+          )}
         </div>
         <div className="panel compact">
           <div className="smallCaps">Share text</div>

@@ -212,6 +212,18 @@ export function formatProfileSummary(profile: Profile) {
   return `${profile.firstName || "Your"} uses ${profile.bankName || "a credit union"}, enjoys ${hobbies}, knows ${profile.familyMember || "family"} (${profile.relation || "relative"}), and uses ${services}.`;
 }
 
-export function toDemoDigestText(profile: Profile, score: number, summary: ReturnType<typeof summarizeRoundState>) {
-  return `${profile.firstName}'s Scam Defense Report\nScore: ${score}/100\nMessages faced: ${summary.total}\nSpotted: ${summary.correct}\nStrongest tactic: ${summary.strongestTactic ?? "n/a"}\nWeakest tactic: ${summary.weakestTactic ?? "n/a"}`;
+export function toDemoDigestText(
+  profile: Profile,
+  score: number,
+  summary: ReturnType<typeof summarizeRoundState>,
+  imageSummary?: { score: number; correct: number; total: number } | null
+) {
+  let text = `${profile.firstName}'s Scam Defense Report\nScore: ${score}/100`;
+  if (summary.total) {
+    text += `\nMessages faced: ${summary.total}\nSpotted: ${summary.correct}\nStrongest tactic: ${summary.strongestTactic ?? "n/a"}\nWeakest tactic: ${summary.weakestTactic ?? "n/a"}`;
+  }
+  if (imageSummary && imageSummary.total) {
+    text += `\nPhoto & video check: ${imageSummary.correct}/${imageSummary.total} correct`;
+  }
+  return text;
 }

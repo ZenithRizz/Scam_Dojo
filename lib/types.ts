@@ -42,3 +42,32 @@ export type ScoreBreakdown = {
   strongestTactic: Tactic | null;
   weakestTactic: Tactic | null;
 };
+
+export type ImageCategory = "real" | "ai" | "deepfake";
+export type Illustration = "profile" | "listing" | "videocall";
+
+export type ImageItem = {
+  id: string;
+  category: ImageCategory;
+  context: string;
+  kind: "photo" | "illustrated";
+  photoSrc?: string;
+  photoAlt?: string;
+  illustration?: Illustration;
+  tells: string[];
+  explanation: string;
+};
+
+export type ImageAnswerRecord = {
+  id: string;
+  userSaidCategory: ImageCategory;
+  correct: boolean;
+  category: ImageCategory;
+};
+
+export type ImageScoreBreakdown = {
+  score: number;
+  correct: number;
+  total: number;
+  byCategory: Record<ImageCategory, { correct: number; total: number }>;
+};
